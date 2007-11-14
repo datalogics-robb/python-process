@@ -190,7 +190,7 @@ class Popen(subprocess.Popen):
 
         if mswindows:
             if timeout != -1:
-                timeout = timeout * 1000
+                timeout = int(timeout * 1000)
             rc = winprocess.WaitForSingleObject(self._handle, timeout)
             if rc == winprocess.WAIT_TIMEOUT:
                 self.kill(group)
