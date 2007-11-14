@@ -217,7 +217,20 @@ class Popen(subprocess.Popen):
                 newtimeout = timeout - time.time() + starttime
                 time.sleep(newtimeout)
 
-            self.kill(group)
+            try:
+                self.kill(group)
+            except OSError:
+                # Process might have finished since we last checked
+                # so wait again
+                pid, sts = os.waitpid(self.pid, os.WNOHANG)
+                if pid != 0:
+                    self._handle_exitstatus(sts)
+                    signal.signal(signal.SIGCHLD, oldsignal)
+                    return self.returncode
+                else:
+                    # strange, waiting failed, propagate original exception
+                    raise
+
             signal.signal(signal.SIGCHLD, oldsignal)
             subprocess.Popen.wait(self)
 
