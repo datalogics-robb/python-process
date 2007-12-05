@@ -107,6 +107,12 @@ class Popen(subprocess.Popen):
 
             kwargs['preexec_fn'] = setpgid_preexec_fn
 
+            # DLADD kam 04Dec07 Add real, user and system timings
+            self._starttime = time.time()
+            self.rtime = 0.0
+            self.utime = 0.0
+            self.stime = 0.0
+
             subprocess.Popen.__init__(self, *args, **kwargs)
 
     if mswindows:
@@ -116,6 +122,13 @@ class Popen(subprocess.Popen):
                            p2cread, p2cwrite,
                            c2pread, c2pwrite,
                            errread, errwrite):
+
+            # DLADD kam 04Dec07 Add real, user and system timings
+            self._starttime = time.time()
+            self.rtime = 0.0
+            self.utime = 0.0
+            self.stime = 0.0
+
             if not isinstance(args, types.StringTypes):
                 args = subprocess.list2cmdline(args)
 
@@ -179,6 +192,38 @@ class Popen(subprocess.Popen):
                 os.kill(self.pid, signal.SIGKILL)
             self.returncode = -9
 
+    def _wait(self, options):
+        """Wait for our pid, gathering resource usage if available"""
+        pid, sts, rusage = os.wait4(self.pid, options)
+        if pid:
+            self.rtime = time.time() - self._starttime
+            self.utime = rusage[0]
+            self.stime = rusage[1]
+        return pid, sts
+
+    def _waitforstatus(self):
+        """Wait for child process to terminate.  Returns returncode
+        attribute."""
+        if self.returncode is None:
+            pid, sts = self._wait(0)
+            self._handle_exitstatus(sts)
+        return self.returncode
+
+    if not mswindows:
+        def poll(self, _deadstate=None):
+            """Check if child process has terminated.  Returns returncode
+            attribute."""
+            if self.returncode is None:
+                try:
+                    pid, sts = self._wait(os.WNOHANG)
+                    if pid == self.pid:
+                        self._handle_exitstatus(sts)
+                except os.error:
+                    if _deadstate is not None:
+                        self.returncode = _deadstate
+            return self.returncode
+
+
     def wait(self, timeout=-1, group=True):
         """Wait for the process to terminate. Returns returncode attribute.
         If timeout seconds are reached and the process has not terminated,
@@ -198,8 +243,7 @@ class Popen(subprocess.Popen):
                 self.returncode = winprocess.GetExitCodeProcess(self._handle)
         else:
             if timeout == -1:
-                subprocess.Popen.wait(self)
-                return self.returncode
+                return self._waitforstatus()
             
             starttime = time.time()
 
@@ -207,7 +251,7 @@ class Popen(subprocess.Popen):
             oldsignal = signal.signal(signal.SIGCHLD, DoNothing)
 
             while time.time() < starttime + timeout - 0.01:
-                pid, sts = os.waitpid(self.pid, os.WNOHANG)
+                pid, sts = self._wait(os.WNOHANG)
                 if pid != 0:
                     self._handle_exitstatus(sts)
                     signal.signal(signal.SIGCHLD, oldsignal)
@@ -222,7 +266,7 @@ class Popen(subprocess.Popen):
             except OSError:
                 # Process might have finished since we last checked
                 # so wait again
-                pid, sts = os.waitpid(self.pid, os.WNOHANG)
+                pid, sts = self._wait(os.WNOHANG)
                 if pid != 0:
                     self._handle_exitstatus(sts)
                     signal.signal(signal.SIGCHLD, oldsignal)
@@ -232,6 +276,6 @@ class Popen(subprocess.Popen):
                     raise
 
             signal.signal(signal.SIGCHLD, oldsignal)
-            subprocess.Popen.wait(self)
+            self._waitforstatus()
 
         return self.returncode
