@@ -201,15 +201,38 @@ class Popen(subprocess.Popen):
             self.stime = rusage[1]
         return pid, sts
 
-    def _waitforstatus(self):
-        """Wait for child process to terminate.  Returns returncode
-        attribute."""
-        if self.returncode is None:
-            pid, sts = self._wait(0)
-            self._handle_exitstatus(sts)
-        return self.returncode
+    if mswindows:
+        def _getstatus(self):
+            self.returncode = winprocess.GetExitCodeProcess(self._handle)
 
-    if not mswindows:
+            creation_time, exit_time, kernel_time, user_time = winprocess.GetProcessTimes(self._handle)
+
+            print creation_time, exit_time, kernel_time, user_time
+
+            self.rtime = time.time() - self._starttime
+            # MS Windows times are in 100ns units, convert to seconds
+            self.utime = user_time / 10000000.0
+            self.stime = kernel_time / 10000000.0
+
+            return self.returncode
+    else:
+        def _waitforstatus(self):
+            """Wait for child process to terminate.  Returns returncode
+            attribute."""
+            if self.returncode is None:
+                pid, sts = self._wait(0)
+                self._handle_exitstatus(sts)
+            return self.returncode
+
+    if mswindows:
+        def poll(self, _deadstate=None):
+            """Check if child process has terminated.  Returns returncode
+            attribute."""
+            if self.returncode is None:
+                if WaitForSingleObject(self._handle, 0) == WAIT_OBJECT_0:
+                    self._getstatus()
+            return self.returncode
+    else:
         def poll(self, _deadstate=None):
             """Check if child process has terminated.  Returns returncode
             attribute."""
@@ -240,7 +263,7 @@ class Popen(subprocess.Popen):
             if rc == winprocess.WAIT_TIMEOUT:
                 self.kill(group)
             else:
-                self.returncode = winprocess.GetExitCodeProcess(self._handle)
+                self._getstatus()
         else:
             if timeout == -1:
                 return self._waitforstatus()
