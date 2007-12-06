@@ -207,8 +207,6 @@ class Popen(subprocess.Popen):
 
             creation_time, exit_time, kernel_time, user_time = winprocess.GetProcessTimes(self._handle)
 
-            print creation_time, exit_time, kernel_time, user_time
-
             self.rtime = time.time() - self._starttime
             # MS Windows times are in 100ns units, convert to seconds
             self.utime = user_time / 10000000.0
