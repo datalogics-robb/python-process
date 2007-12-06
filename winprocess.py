@@ -24,7 +24,7 @@
 # DEALINGS IN THE SOFTWARE.
 
 from ctypes import c_void_p, POINTER, sizeof, Structure, windll, WinError, WINFUNCTYPE
-from ctypes.wintypes import BOOL, BYTE, DWORD, HANDLE, LPCWSTR, LPWSTR, UINT, WORD
+from ctypes.wintypes import BOOL, BYTE, DWORD, HANDLE, LPCWSTR, LPWSTR, UINT, WORD, ULARGE_INTEGER
 
 LPVOID = c_void_p
 LPBYTE = POINTER(BYTE)
@@ -260,3 +260,26 @@ GetExitCodeProcess = GetExitCodeProcessProto(
     ("GetExitCodeProcess", windll.kernel32),
     GetExitCodeProcessFlags)
 GetExitCodeProcess.errcheck = ErrCheckBool
+
+
+# GetProcessTimes()
+LPULARGE_INTEGER = POINTER(ULARGE_INTEGER)
+
+GetProcessTimesProto = WINFUNCTYPE(BOOL, # Return Type
+                                   HANDLE, # hProcess
+                                   LPULARGE_INTEGER, # lpCreationTime
+                                   LPULARGE_INTEGER, # lpExitTime
+                                   LPULARGE_INTEGER, # lpKernelTime
+                                   LPULARGE_INTEGER, # lpUserTime
+                                   )
+GetProcessTimesFlags = ((1, "hProcess"),
+                        (2, "lpCreationTime"),
+                        (2, "lpExitTime"),
+                        (2, "lpKernelTime"),
+                        (2, "lpUserTime"))
+
+GetProcessTimes = GetProcessTimesProto(
+    ("GetProcessTimes", windll.kernel32),
+    GetProcessTimesFlags)
+
+GetProcessTimes.errcheck = ErrCheckBool
