@@ -64,11 +64,32 @@ except ImportError:
             return "Command '%s' returned non-zero exit status %d" % (self.cmd, self.returncode)
 
 mswindows = (sys.platform == "win32")
+aix5 = (sys.platform == "aix5")
+
+# WEXITED fix
+if aix5:
+    # AIX 5 has a bug where wait4() doesn't wait for exited processes by 
+    # default. wait3() takes whatever options are specified and ORs in the
+    # WEXITED option before calling the kwaitpid() function. (kwaitpid()
+    # is a syscall that all wait*() functions call).
+    #
+    # So, we can get around the problem by adding WEXITED ourselves if it
+    # exists. We define WEXITED on AIX using the value 4 gotten from sys/wait.h
+    #
+    # This fix may be necessary on other OSes as well.
+    WEXITED = 0x04 # From /usr/include/sys/wait.h
+else:
+    try:
+        # In case this value gets into the os module
+        WEXITED = os.WEXITED
+    except AttributeError:
+        WEXITED = 0
 
 if mswindows:
     import winprocess
 else:
     import signal
+    import errno
 
 def call(*args, **kwargs):
     waitargs = {}
@@ -192,14 +213,26 @@ class Popen(subprocess.Popen):
                 os.kill(self.pid, signal.SIGKILL)
             self.returncode = -9
 
-    def _wait(self, options):
-        """Wait for our pid, gathering resource usage if available"""
-        pid, sts, rusage = os.wait4(self.pid, options)
-        if pid:
-            self.rtime = time.time() - self._starttime
-            self.utime = rusage[0]
-            self.stime = rusage[1]
-        return pid, sts
+    if not mswindows:
+        def _wait(self, options):
+            """Wait for our pid, gathering resource usage if available"""
+            pid, sts, rusage = self._wait4_no_intr(self.pid, options)
+            if pid:
+                self.rtime = time.time() - self._starttime
+                self.utime = rusage[0]
+                self.stime = rusage[1]
+            return pid, sts
+
+        def _wait4_no_intr(self, pid, options):
+            """Like os.wait4, but retries on EINTR"""
+            while True:
+                try:
+                    return os.wait4(pid, options | WEXITED)
+                except OSError, e:
+                    if e.errno == errno.EINTR:
+                        continue
+                    else:
+                        raise
 
     if mswindows:
         def _getstatus(self):
