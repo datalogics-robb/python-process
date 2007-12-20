@@ -48,6 +48,7 @@ import sys
 import os
 import time
 import types
+import threading
 
 try:
     from subprocess import CalledProcessError
@@ -108,10 +109,6 @@ def check_call(*args, **kwargs):
         if cmd is None:
             cmd = args[0]
         raise CalledProcessError(retcode, cmd)
-
-if not mswindows:
-    def DoNothing(*args):
-        pass
 
 class Popen(subprocess.Popen):
     if not mswindows:
@@ -223,11 +220,23 @@ class Popen(subprocess.Popen):
                 self.stime = rusage[1]
             return pid, sts
 
+        try:
+            _wait4 = os.wait4
+        except AttributeError:
+            # Don't have wait4 so try wait3 with a check
+            # this only works if we are waiting for one process
+            @staticmethod
+            def _wait4(pid, options):
+                rpid, status, rusage = os.wait3(options)
+                if rpid and rpid != pid:
+                    raise Exception("Waiting for pid %d but unexpected pid %d exited" % (pid, rpid))
+                return rpid, status, rusage
+                    
         def _wait4_no_intr(self, pid, options):
             """Like os.wait4, but retries on EINTR"""
             while True:
                 try:
-                    return os.wait4(pid, options | WEXITED)
+                    return self._wait4(pid, options | WEXITED)
                 except OSError, e:
                     if e.errno == errno.EINTR:
                         continue
@@ -298,38 +307,29 @@ class Popen(subprocess.Popen):
         else:
             if timeout == -1:
                 return self._waitforstatus()
+
+            # An event indicating that the main thread saw the process exit
+            doneevent = threading.Event()
+
+            def killerthread():
+                """Wait for the timeout, then attempt to kill the related process."""
+                doneevent.wait(timeout)
+                try:
+                    self.kill(group)
+                except OSError:
+                    pass
             
-            starttime = time.time()
-
-            # Make sure there is a signal handler for SIGCHLD installed
-            oldsignal = signal.signal(signal.SIGCHLD, DoNothing)
-
-            while time.time() < starttime + timeout - 0.01:
-                pid, sts = self._wait(os.WNOHANG)
-                if pid != 0:
-                    self._handle_exitstatus(sts)
-                    signal.signal(signal.SIGCHLD, oldsignal)
-                    return self.returncode
-                
-                # time.sleep is interrupted by signals (good!)
-                newtimeout = timeout - time.time() + starttime
-                time.sleep(newtimeout)
+            # Make a thread that will kill the subprocess after waiting for the timeout.
+            thd = threading.Thread(target=killerthread)
+            thd.setDaemon(True)
+            thd.start()
 
             try:
-                self.kill(group)
-            except OSError:
-                # Process might have finished since we last checked
-                # so wait again
-                pid, sts = self._wait(os.WNOHANG)
-                if pid != 0:
-                    self._handle_exitstatus(sts)
-                    signal.signal(signal.SIGCHLD, oldsignal)
-                    return self.returncode
-                else:
-                    # strange, waiting failed, propagate original exception
-                    raise
-
-            signal.signal(signal.SIGCHLD, oldsignal)
-            self._waitforstatus()
+                self._waitforstatus()
+            finally:
+                # Set the event, so if the killer thread is still waiting, it will continue through exit
+                doneevent.set()
+                # Join up with the thread, which should be exiting now
+                thd.join()
 
         return self.returncode
