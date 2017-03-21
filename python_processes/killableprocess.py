@@ -134,12 +134,12 @@ class Popen(subprocess.Popen):
             subprocess.Popen.__init__(self, *args, **kwargs)
 
     if mswindows:
-        def _execute_child(self, args, executable, preexec_fn, close_fds,
-                           cwd, env, universal_newlines, startupinfo,
-                           creationflags, shell,
-                           p2cread, p2cwrite,
-                           c2pread, c2pwrite,
-                           errread, errwrite):
+        def _internal_execute_child(self, args, executable, preexec_fn, close_fds,
+                                   cwd, env, universal_newlines, startupinfo,
+                                   creationflags, shell, to_close,
+                                   p2cread, p2cwrite,
+                                   c2pread, c2pwrite,
+                                   errread, errwrite):
 
             # DLADD kam 04Dec07 Add real, user and system timings
             self._starttime = time.time()
@@ -165,20 +165,45 @@ class Popen(subprocess.Popen):
                 comspec = os.environ.get("COMSPEC", "cmd.exe")
                 args = comspec + " /c " + args
 
+            def _close_in_parent(fd):
+                fd.Close()
+                if fd in to_close:
+                    to_close.remove(fd)
+
             # We create a new job for this process, so that we can kill
             # the process and any sub-processes 
             self._job = winprocess.CreateJobObject()
 
             creationflags |= winprocess.CREATE_SUSPENDED
             creationflags |= winprocess.CREATE_UNICODE_ENVIRONMENT
-
-            hp, ht, pid, tid = winprocess.CreateProcess(
-                executable, args,
-                None, None, # No special security
-                1, # Must inherit handles!
-                creationflags,
-                winprocess.EnvironmentBlock(env),
-                cwd, startupinfo)
+            try:
+                hp, ht, pid, tid = winprocess.CreateProcess(
+                    executable, args,
+                    None, None,  # No special security
+                    int(not close_fds),
+                    creationflags,
+                    winprocess.EnvironmentBlock(env),
+                    cwd,
+                    startupinfo)
+            except pywintypes.error, e:
+                # Translate pywintypes.error to WindowsError, which is
+                # a subclass of OSError.  FIXME: We should really
+                # translate errno using _sys_errlist (or similar), but
+                # how can this be done from Python?
+                raise WindowsError(*e.args)
+            finally:
+                # Child is launched. Close the parent's copy of those pipe
+                # handles that only the child should have open.  You need
+                # to make sure that no handles to the write end of the
+                # output pipe are maintained in this process or else the
+                # pipe will not close when the child process exits and the
+                # ReadFile will hang.
+                if p2cread is not None:
+                    _close_in_parent(p2cread)
+                if c2pwrite is not None:
+                    _close_in_parent(c2pwrite)
+                if errwrite is not None:
+                    _close_in_parent(errwrite)
             
             self._child_created = True
             self._handle = hp
@@ -194,6 +219,34 @@ class Popen(subprocess.Popen):
                 c2pwrite.Close()
             if errwrite is not None:
                 errwrite.Close()
+
+        if sys.version_info[:2] != (2, 7):
+            def _execute_child(self, args, executable, preexec_fn, close_fds,
+                                   cwd, env, universal_newlines, startupinfo,
+                                   creationflags, shell,
+                                   p2cread, p2cwrite,
+                                   c2pread, c2pwrite,
+                                   errread, errwrite):
+                return self._internal_execute_child(args, executable, preexec_fn, close_fds,
+                                                    cwd, env, universal_newlines, startupinfo,
+                                                    creationflags, shell, [p2cread, p2cwrite, errwrite],
+                                                    p2cread, p2cwrite,
+                                                    c2pread, c2pwrite,
+                                                    errread, errwrite)
+        else:
+            def _execute_child(self, args, executable, preexec_fn, close_fds,
+                               cwd, env, universal_newlines, startupinfo,
+                               creationflags, shell, to_close,
+                               p2cread, p2cwrite,
+                               c2pread, c2pwrite,
+                               errread, errwrite):
+                return self._internal_execute_child( args, executable, preexec_fn, close_fds,
+                                                     cwd, env, universal_newlines, startupinfo,
+                                                     creationflags, shell, to_close,
+                                                     p2cread, p2cwrite,
+                                                     c2pread, c2pwrite,
+                                                     errread, errwrite)
+
 
     def kill(self, group=True):
         """Kill the process. If group=True, all sub-processes will also be killed."""
