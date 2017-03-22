@@ -3,7 +3,7 @@
 from distutils.core import setup
 
 setup(name='python_processes',
-      version='1.0.1', # A DL-specific version number
+      version='1.0.2', # A DL-specific version number
       description='Extensions to the subprocess module',
       author='Benjamin Smedberg',
       author_email='benjamin@smedbergs.us',
